@@ -420,14 +420,19 @@ def device_name() -> str:
     return name
 
 
-def _headline_head(payload: dict, state: dict, sid: str, fallback: str = "当前会话") -> str:
-    """通知第一行的落点：💻 设备名 · 会话标题（多设备同账号时便于区分来源）。"""
+def _device_line() -> str:
+    """设备行：🖥 主机名（多设备同账号时区分消息来自哪台机器）。"""
+    dev = device_name()
+    return f"🖥 {dev}" if dev else ""
+
+
+def _title_line(payload: dict, state: dict, sid: str, fallback: str = "当前会话") -> str:
+    """会话行：💬 会话名（WorkBuddy 改名自动跟随）。"""
     title = session_title(state, sid)
     if not title:
         cwd = str(pick(payload, "cwd", default="") or "")
         title = (Path(cwd).name if cwd else "") or fallback
-    dev = device_name()
-    return f"💻 {dev} · {title}" if dev else title
+    return f"💬 {title}"
 
 
 # --------------------------------------------------------------------------- #
@@ -441,18 +446,17 @@ def build_message(event: str, payload: dict, args, state: dict) -> tuple[str, st
     if event == "Stop" and payload.get("stop_hook_active"):
         return None
 
+    # 竖排样式：每行一个 Emoji 开头。公共头两行 = 设备行 + 会话行
+    lines = [ln for ln in (_device_line(), _title_line(payload, state, sid)) if ln]
     folder = _folder_line(payload)
-    head = _headline_head(payload, state, sid)
-    body = [folder] if folder else []
 
     if event == "Stop":
-        # 本轮完成概要：取助手最后一条消息，极简裁剪（"特别精简"）
+        # 本轮完成概要：取助手最后一条消息，极简裁剪
         summary = str(pick(payload, "last_assistant_message", "lastAssistantMessage",
                            "result", "summary", default="")).strip()
-        stop_body = []
         if summary:
-            stop_body.append(f"📝 {clip_text(summary, args.stop_summary_chars)}")
-        return f"✅ 任务完成：{head}", "\n".join(stop_body), "stop"
+            lines.append(f"📝 {clip_text(summary, args.stop_summary_chars)}")
+        return "✅ 任务完成", "\n".join(lines), "stop"
 
     if event == "Notification":
         ntype = str(pick(payload, "notification_type", "type", "notificationType", default=""))
@@ -460,17 +464,19 @@ def build_message(event: str, payload: dict, args, state: dict) -> tuple[str, st
         low = ntype.lower()
         if "auth_success" in low:
             return None
+        if folder:
+            lines.append(folder)
         if "idle" in low or "wait" in low or "空闲" in ntype:
             if message:
-                body.append(clip_text(message, args.summary_chars))
-            return f"⏸️ 等你回复：{head}", "\n".join(body), "idle"
+                lines.append(clip_text(message, args.summary_chars))
+            return "⏸️ 等你回复", "\n".join(lines), "idle"
         if "permission" in low or ("auth" in low and "success" not in low):
             if message:
-                body.append(clip_text(message, args.summary_chars))
-            return f"🔐 需确认：{head}", "\n".join(body), "attention"
+                lines.append(clip_text(message, args.summary_chars))
+            return "🔐 需确认", "\n".join(lines), "attention"
         if message:
-            body.append(clip_text(message, args.summary_chars))
-        return f"👀 需要你看一眼：{head}", "\n".join(body), "notice"
+            lines.append(clip_text(message, args.summary_chars))
+        return "👀 需要你看一眼", "\n".join(lines), "notice"
 
     if event == "PermissionRequest":
         tool = str(pick(payload, "tool_name", "toolName", default=""))
@@ -478,18 +484,20 @@ def build_message(event: str, payload: dict, args, state: dict) -> tuple[str, st
         risky, why = is_high_risk(tool, tool_input)
         if not risky and not args.all_permissions:
             return None
-        body.append(f"🛠 工具：{tool or '-'}")
+        if folder:
+            lines.append(folder)
+        lines.append(f"🛠 工具：{tool or '-'}")
         if why:
-            body.append(f"⚠️ 原因：{why}")
+            lines.append(f"⚠️ 原因：{why}")
         if tool in COMMAND_TOOLS and isinstance(tool_input, dict):
             cmd = str(pick(tool_input, "command", "cmd", default=""))
             if cmd:
-                body += ["", f"💻 命令：{clip_text(cmd, 300)}"]
+                lines += ["", f"💻 命令：{clip_text(cmd, 300)}"]
         elif isinstance(tool_input, dict):
             target = pick(tool_input, "file_path", "path", default="")
             if target:
-                body += ["", f"🎯 目标：{target}"]
-        return f"🔐 需确认：{head}", "\n".join(body), "attention"
+                lines += ["", f"🎯 目标：{target}"]
+        return "🔐 需确认", "\n".join(lines), "attention"
 
     return None
 
