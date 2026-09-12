@@ -454,6 +454,12 @@ _RESULT_WORDS = re.compile(
     r"停用|发布|推送|同步|清理|重建|重启|导出|导入|提交|合并|发布版|已实现|已支持)"
 )
 _CODEY_LINE = re.compile(r"^[\s\{\}\[\]\(\);=<>+\-*/|`\\~^\"']*$")
+# Emoji 及其修饰符：概要里不需要 AI 消息自带的表情（→ 等有语义的箭头保留）
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002B00-\U00002BFF"
+    "\U0001F1E6-\U0001F1FF\u231A\u231B\u23E9-\u23EC\u23F0\u23F3\u23F8-\u23FA"
+    "\uFE0F\u200D\u20E3\u3030\u303D]"
+)
 _HAS_URL = re.compile(r"https?://|www\.")
 _TAIL_PUNCT = " ，,。.、；;：:！!？?"
 
@@ -465,6 +471,8 @@ def _strip_md(text: str) -> str:
     t = t.replace("**", "").replace("__", "")
     t = re.sub(r"[*_~`#>|]+", " ", t)                        # 强调/标题/表格线
     t = re.sub(r"(?m)^\s*[-=]{2,}[-=\s]*$", " ", t)          # 水平分隔线整行删除
+    t = _EMOJI_RE.sub(" ", t)                                # AI 消息自带的 Emoji 去掉
+    t = re.sub(r"[ \t]+([，。、；：！？）」』\]])", r"\1", t)  # 标点前不留空格
     t = re.sub(r"^\s{0,12}[-*+]\s+", "", t)                  # 无序列表前缀
     t = re.sub(r"^\s{0,12}\d{1,2}[.、)]\s+", "", t)          # 有序列表前缀
     return t
