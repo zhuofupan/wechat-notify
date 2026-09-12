@@ -436,6 +436,74 @@ def _title_line(payload: dict, state: dict, sid: str, fallback: str = "当前会
 
 
 # --------------------------------------------------------------------------- #
+# 概要提取：把助手的最后一条消息压成一行"干货"。
+# 去掉 Markdown 符号、客套话、空行/符号行，挑信息量最高的一句，再极简裁剪。
+# --------------------------------------------------------------------------- #
+_FILLER_LEAD = re.compile(
+    r"^(好的[的呀吧]?[，,。！!]?|明白了?[。！!]?|收到[。！!]?|完成[。！!]?|搞定[。！!]?|"
+    r"当然[，,。!！。]?|没问题[。！!]?|说实在的[，,]?|说实话[，,]?|直接说结论[：:]?|"
+    r"嗯+|哦+|让我|我来|我先|接下来|另外[，,]?|首先[，,]?|其次[，,]?|总之[，,]?|"
+    r"注意[：:]?|补充[一下]*[：:]?)\s*",
+)
+_RESULT_WORDS = re.compile(
+    r"(完成|修复|修好|解决|新增|添加|删除|移除|成功|通过|失败|报错|错误|异常|部署|上线|"
+    r"更新|升级|创建|生成|写好|跑通|验证|优化|重构|支持|兼容|迁移|配置|安装|卸载|启用|"
+    r"停用|发布|推送|同步|清理|重建|重启|导出|导入|提交|合并|发布版|已实现|已支持)"
+)
+_CODEY_LINE = re.compile(r"^[\s\{\}\[\]\(\);=<>+\-*/|`\\~^\"']*$")
+_HAS_URL = re.compile(r"https?://|www\.")
+_TAIL_PUNCT = " ，,。.、；;：:！!？?"
+
+
+def _strip_md(text: str) -> str:
+    """去掉常见 Markdown 装饰符号，保留文字内容。"""
+    t = re.sub(r"```[a-zA-Z0-9+-]*", " ", text)              # 代码围栏
+    t = re.sub(r"!?\[([^\]]*)\]\([^)]{0,300}\)", r"\1", t)   # [文字](链接) → 文字
+    t = t.replace("**", "").replace("__", "")
+    t = re.sub(r"[*_~`#>|]+", " ", t)                        # 强调/标题/表格线
+    t = re.sub(r"(?m)^\s*[-=]{2,}[-=\s]*$", " ", t)          # 水平分隔线整行删除
+    t = re.sub(r"^\s{0,12}[-*+]\s+", "", t)                  # 无序列表前缀
+    t = re.sub(r"^\s{0,12}\d{1,2}[.、)]\s+", "", t)          # 有序列表前缀
+    return t
+
+
+def _pick_summary_line(text: str) -> str:
+    """从消息里挑一句最有信息量的：优先首句结论，首句是客套话则向下找结果句。"""
+    fallback = ""
+    for idx, raw in enumerate(text.splitlines()[:40]):
+        line = " ".join(_strip_md(raw).split())
+        if not line or _CODEY_LINE.match(line):
+            continue
+        for _ in range(2):  # 客套话最多剥两层（"好的。明白了。xxx"）
+            stripped = _FILLER_LEAD.sub("", line).strip(_TAIL_PUNCT)
+            if stripped == line or len(stripped) < 6:
+                break            # 没剥动 / 剥后太短：保留原句
+            line = stripped
+        core = line.strip(_TAIL_PUNCT)
+        if len(core) < 6 or len(core) > 120 or _CODEY_LINE.match(core):
+            continue
+        if idx == 0:
+            return core                       # 首行有干货，直接用
+        if not fallback:
+            fallback = core                   # 先记一个候选
+        if _RESULT_WORDS.search(core):
+            return core                       # 结果句优先于普通后文
+    return fallback
+
+
+def summarize(text: str, limit: int) -> str:
+    """概要入口：去无用字符 + 挑干货句 + 极简裁剪。"""
+    if not text:
+        return ""
+    core = _pick_summary_line(text[:4000])
+    if not core:
+        core = " ".join(_strip_md(text[:4000]).split())   # 兜底：整条压平
+    core = core.strip(_TAIL_PUNCT)
+    out = clip_text(core, limit).rstrip(_TAIL_PUNCT)
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # 事件 -> (通知标题, 正文, 节流分组键)
 # 节流键让 PermissionRequest 和 Notification(权限) 共用一组，
 # 避免同一件事推两条，白白消耗微信配额。
@@ -451,11 +519,13 @@ def build_message(event: str, payload: dict, args, state: dict) -> tuple[str, st
     folder = _folder_line(payload)
 
     if event == "Stop":
-        # 本轮完成概要：取助手最后一条消息，极简裁剪
+        # 本轮完成概要：去 Markdown 符号/客套话，挑信息量最高的一句，极简裁剪
         summary = str(pick(payload, "last_assistant_message", "lastAssistantMessage",
                            "result", "summary", default="")).strip()
         if summary:
-            lines.append(f"📝 {clip_text(summary, args.stop_summary_chars)}")
+            brief = summarize(summary, args.stop_summary_chars)
+            if brief:
+                lines.append(f"📝 {brief}")
         return "✅ 任务完成", "\n".join(lines), "stop"
 
     if event == "Notification":

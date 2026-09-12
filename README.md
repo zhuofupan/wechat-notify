@@ -166,6 +166,8 @@ python watchdog.py --name python --idle 600   # 按进程名找，10 分钟没�
 
 **💻 设备名**：取 OS 主机名（`platform.node()`，与 WorkBuddy 心跳记录的 `hostname` 一致）。同一账号多台设备登录时，一眼分清消息来自哪台机器。
 
+**📝 完成概要**：取助手最后一条消息，**自动去掉无用字符**——Markdown 装饰（`**`、`#`、表格线、链接只留文字）、客套话开场白（"完成。/好的。/明白了。/让我…"）、空行与纯符号行——再挑信息量最高的一句裁到 40 字（`--stop-summary-chars` 可调）。
+
 **会话名从哪来**（按优先级）：
 1. `~/.workbuddy/workbuddy.db` 的 `sessions` 表：`custom_title`（你在 UI 里改的名）> `title`（自动生成）——以**只读**方式查询，改完名自动跟随；
 2. 本会话第一句提问（`UserPromptSubmit` 时记录）；
