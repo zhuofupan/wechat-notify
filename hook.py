@@ -386,20 +386,48 @@ def db_session_title(sid: str) -> str:
             pass
 
 
-def _headline_head(payload: dict, state: dict, sid: str, fallback: str = "当前会话") -> str:
-    """通知第一行的落点：优先用会话标题，其次用项目文件夹名。"""
-    title = session_title(state, sid)
-    if title:
-        return title
-    cwd = str(pick(payload, "cwd", default="") or "")
-    return (Path(cwd).name if cwd else "") or fallback
-
-
 def _folder_line(payload: dict) -> str:
     """精简消息用：只取项目文件夹名一行。"""
     cwd = str(pick(payload, "cwd", default="") or "")
     folder = Path(cwd).name if cwd else ""
     return f"📁 {folder}" if folder else ""
+
+
+# --------------------------------------------------------------------------- #
+# 设备名：同一账号可能多台设备登录，消息里先标明"从哪台机器来的"。
+# WorkBuddy 心跳文件（~/.workbuddy/sessions/*.json）里的 hostname 与 OS 主机名
+# 同源（实测一致），直接取 platform.node() 即可，无需查库；跨平台稳定。
+# --------------------------------------------------------------------------- #
+_DEVICE: dict = {}
+
+
+def device_name() -> str:
+    if "name" in _DEVICE:
+        return _DEVICE["name"]
+    name = ""
+    try:
+        import platform
+        name = (platform.node() or "").strip()
+    except Exception:
+        name = ""
+    if not name:
+        try:
+            import socket
+            name = (socket.gethostname() or "").strip()
+        except Exception:
+            name = ""
+    _DEVICE["name"] = name
+    return name
+
+
+def _headline_head(payload: dict, state: dict, sid: str, fallback: str = "当前会话") -> str:
+    """通知第一行的落点：💻 设备名 · 会话标题（多设备同账号时便于区分来源）。"""
+    title = session_title(state, sid)
+    if not title:
+        cwd = str(pick(payload, "cwd", default="") or "")
+        title = (Path(cwd).name if cwd else "") or fallback
+    dev = device_name()
+    return f"💻 {dev} · {title}" if dev else title
 
 
 # --------------------------------------------------------------------------- #

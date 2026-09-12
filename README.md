@@ -146,17 +146,19 @@ python watchdog.py --name python --idle 600   # 按进程名找，10 分钟没�
 ## 消息样式
 
 ```
-✅ 任务完成：我的项目
+✅ 任务完成：💻 MY-PC · 我的项目
 📝 已把部署脚本跑通，测试 12/12 通过。
 
-⏸️ 等你回复：我的项目
+⏸️ 等你回复：💻 MY-PC · 我的项目
 📁 my-project
 
-🔐 需确认：我的项目
+🔐 需确认：💻 MY-PC · 我的项目
 🛠 工具：Bash
 ⚠️ 原因：危险命令：rm -rf /
 💻 命令：rm -rf /
 ```
+
+**💻 设备名**：取 OS 主机名（`platform.node()`，与 WorkBuddy 心跳记录的 `hostname` 一致）。同一账号多台设备登录时，一眼分清消息来自哪台机器。
 
 **会话名从哪来**（按优先级）：
 1. `~/.workbuddy/workbuddy.db` 的 `sessions` 表：`custom_title`（你在 UI 里改的名）> `title`（自动生成）——以**只读**方式查询，改完名自动跟随；
