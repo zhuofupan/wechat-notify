@@ -1,0 +1,61 @@
+{
+  "_说明": "把本文件复制一份改名为 config.json，只保留你真正用的那 1 个通道，把 enabled 改成 true 并填入密钥即可。填了占位符的通道会被自动跳过。",
+
+  "timeout": 10,
+  "ignore_env_proxy": true,
+
+  "channels": [
+    {
+      "_说明": "【推荐·官方通道】企业微信自建应用消息：可以直接出现在个人微信里，免费无限量。配置步骤见 README 第 2 节。",
+      "type": "wecom_app",
+      "enabled": false,
+      "corpid": "你的企业ID(我的企业->企业信息->企业ID)",
+      "corpsecret": "你的应用Secret(应用管理->自建->你的应用->Secret)",
+      "agentid": 1000002,
+      "touser": "@all"
+    },
+    {
+      "_说明": "【最简单·官方通道】企业微信群里加一个“消息推送”(原群机器人)，复制 Webhook 地址。5 分钟搞定，但消息落在企业微信群里。",
+      "type": "wecom_webhook",
+      "enabled": false,
+      "webhook": "你的webhook地址(https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...)"
+    },
+    {
+      "_说明": "【最省事·第三方】Server酱：微信扫码拿 SendKey，免费每天 5 条。https://sct.ftqq.com",
+      "type": "serverchan",
+      "enabled": false,
+      "sendkey": "你的SCT...SendKey"
+    },
+    {
+      "_说明": "【第三方】WxPusher 极简推送：扫码拿 SPT，免费。https://wxpusher.zjiecode.com",
+      "type": "wxpusher",
+      "enabled": false,
+      "spt": "你的SPT_...令牌"
+    },
+    {
+      "_说明": "【第三方】PushPlus：微信扫码拿 token，免费每天 200 条。https://www.pushplus.plus",
+      "type": "pushplus",
+      "enabled": false,
+      "token": "你的pushplus_token",
+      "template": "txt"
+    },
+    {
+      "_说明": "钉钉群机器人（可选，备用）",
+      "type": "dingtalk",
+      "enabled": false,
+      "webhook": "你的钉钉webhook地址"
+    },
+    {
+      "_说明": "飞书群机器人（可选，备用）",
+      "type": "feishu",
+      "enabled": false,
+      "webhook": "你的飞书webhook地址"
+    },
+    {
+      "_说明": "任意自定义 Webhook，会 POST {\"title\":..,\"content\":..,\"text\":..}（可选）",
+      "type": "webhook",
+      "enabled": false,
+      "webhook": "你的自定义webhook地址"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+# 含个人凭据，绝不提交
+config.json
+.token_cache.json
+
+# 本地运行状态与日志（含会话名、本机路径）
+.hook_state.json
+hook.log
+hook_payload.jsonl
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 系统
+.DS_Store
+Thumbs.db
