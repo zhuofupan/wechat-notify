@@ -27,7 +27,8 @@ hook.py —— 挂在 AI 助手（WorkBuddy / Claude Code 等）的 hook 上，
 --------
 * 默认**不向 stdout 输出任何内容**，避免影响 hook 的 JSON 约定；
   调试用 --verbose，日志写在脚本同目录的 hook.log。
-* 有节流（默认 Stop 类 60 秒内只推一条），避免连续回合刷屏。
+* 有节流：节流计时器**按会话独立**，同一会话的完成通知有 5 分钟静默窗口
+  （Stop 是每轮都触发的，不静默就会一个会话响很多次）；跨会话另有 15s 全局兜底。
 * 任何异常都吞掉并返回 0，绝不阻塞 AI 助手。
 """
 
@@ -78,6 +79,33 @@ def log(msg: str, verbose: bool = False) -> None:
             pass
 
 
+STATE_TITLES_MAX = 200      # titles / 节流键最多保留多少条，防状态文件无限膨胀
+
+
+def _prune_state(state: dict) -> None:
+    """裁掉过期的节流键与过多的标题缓存。
+
+    节流键带 session_id 后会随会话数增长；titles 同理。不裁的话
+    .hook_state.json 会一直涨（实测已堆了十几个会话）。
+    """
+    try:
+        # 节流键超过 24h 未更新即可丢弃
+        cutoff = time.time() - 86400
+        for k in [k for k in state if k.startswith("last_")]:
+            try:
+                if float(state.get(k, 0)) < cutoff:
+                    state.pop(k, None)
+            except (TypeError, ValueError):
+                state.pop(k, None)
+        titles = state.get("titles")
+        if isinstance(titles, dict) and len(titles) > STATE_TITLES_MAX:
+            # 保留最后插入的 N 条（dict 保持插入序）
+            for k in list(titles.keys())[: len(titles) - STATE_TITLES_MAX]:
+                titles.pop(k, None)
+    except Exception:
+        pass
+
+
 def load_state() -> dict:
     try:
         if STATE_FILE.is_file():
@@ -89,6 +117,7 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     try:
+        _prune_state(state)
         STATE_FILE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
@@ -310,10 +339,21 @@ TITLE_MAX = 60
 TITLE_KEEP = 60
 
 # 各分组的节流窗口（秒）。
-# stop 窗口故意设得很短（10s）：用户明确要"每次任务完成都收到提醒"，
-# 窗口过长会把一来一回的真实完成通知吞掉（实测 60s 太容易误杀）。
-# 10s 只挡同一瞬间的重复触发（比如 hook 同回合被触发两次）。
-THROTTLE_WINDOWS = {"stop": 10.0, "idle": 60.0, "attention": 60.0, "notice": 60.0}
+#
+# ⚠️ 历史坑（2026-09-26 修）：stop 窗口原先只有 10s，理由是"用户要每次完成都提醒"。
+# 但 Stop 事件是**每个对话回合**都触发的（一轮里 AI 调几次工具就触发几次），
+# 10s 窗口根本拦不住 —— 实测一个半小时的会话推了 4 条"✅ 任务完成"，
+# 而用户要的是"这个会话干完了提醒我一次"。
+#
+# 现在 stop 用 STOP_QUIET_WINDOW：同一会话内，距上次完成推送不足这个时长
+# 就静默跳过；只有"确实安静了 N 分钟"才算这个会话真的收工。
+# 这样连续干活的会话全程最多响一次，而隔了很久再回来干活会重新提醒。
+STOP_QUIET_WINDOW = 300.0     # 5 分钟
+THROTTLE_WINDOWS = {"idle": 60.0, "attention": 60.0, "notice": 60.0}
+
+# 全局兜底：任何分组、任何会话之间，两条推送至少间隔这么久，防极端刷屏。
+# 设小一点（15s），只挡"同时刻多组事件齐发"，不影响正常使用。
+GLOBAL_MIN_GAP = 15.0
 
 
 def _short_title(text: str) -> str:
@@ -604,7 +644,7 @@ def main(argv=None) -> int:
     ap.add_argument("--stop-summary-chars", type=int, default=40,
                     help="Stop 消息里'本轮完成概要'最多取多少字（默认 40，极简）")
     ap.add_argument("--min-interval", type=float, default=60.0,
-                    help="同类事件最短间隔秒数，防止刷屏（默认 60）")
+                    help="非完成类事件的节流兜底秒数（默认 60；完成类内定为 300s 静默窗口）")
     ap.add_argument("--timeout", type=int, default=6,
                     help="单次推送的网络超时秒数（默认 6，避免拖慢 AI 助手）")
     ap.add_argument("--all-permissions", action="store_true",
@@ -688,15 +728,36 @@ def main(argv=None) -> int:
     # 测试事件：不检查节流、不写入节流状态，避免"刚测完真 Stop 就被吞"
     is_test = bool(args.test_stop or args.test_notify)
 
-    # 节流：按"分组键"而不是事件名，PermissionRequest 与 Notification(权限)
-    # 共用 attention 组 —— 同一件事只推一条，不重复消耗微信配额。
-    # 各分组窗口不同（stop 只 10s，其余 60s），可用 --min-interval 覆盖默认。
-    # 测试事件完全绕过节流（测试不应影响真实通知的节流状态）
-    key = f"last_{throttle_key}"
+    # 节流：按「会话 + 事件组」为键，而不是只按事件组。
+    #
+    # ⚠️ 历史坑（2026-09-26 修）：原先 key 只有事件组（"stop"），是**全局共享**的。
+    # 后果有二：
+    #   ① 同一会话里，每轮 Stop 只要间隔超过窗口就重复推一条（用户报的"重复提醒"）；
+    #   ② 不同会话互相压制 —— A 会话刚推完，B 会话的完成通知会被 A 的计时器吞掉，
+    #      而 B 那边又因为"推成功才写状态"的规则先写了 B 的计时器……两边错乱。
+    #
+    # 现在把 sid 拼进 key：每个会话各自的节流计时器，互不干扰。
+    # 拿不到 sid（极端情况）就用 "-" 兜底，退化成原来的全局行为，不会崩。
+    # 键里带 session_id 也顺带让旧状态文件里的 "last_stop" 等旧键自然过期失效。
+    sid = str(pick(payload, "session_id", default="")).strip()
+    sid_key = sid[:64] if sid else "-"
+    group = throttle_key
+    key = f"last_{group}_{sid_key}"
     now = time.time()
-    window = THROTTLE_WINDOWS.get(throttle_key, args.min_interval)
+
+    if group == "stop":
+        window = STOP_QUIET_WINDOW
+    else:
+        window = THROTTLE_WINDOWS.get(group, args.min_interval)
+
     if not is_test and window > 0 and now - float(state.get(key, 0)) < window:
-        log(f"{event}: 节流跳过（{throttle_key} 组 {window:g}s 内已推过）", args.verbose)
+        log(f"{event}: 节流跳过（会话 {sid_key[:8]} 的 {group} 组 {window:g}s 内已推过）",
+            args.verbose)
+        return 0
+
+    # 全局兜底：跨会话也至少隔 GLOBAL_MIN_GAP，挡"多会话同时收工"式的齐发
+    if not is_test and GLOBAL_MIN_GAP > 0 and now - float(state.get("last_any", 0)) < GLOBAL_MIN_GAP:
+        log(f"{event}: 全局节流跳过（{GLOBAL_MIN_GAP:g}s 内已有任意推送）", args.verbose)
         return 0
 
     if args.dry_run:
@@ -732,6 +793,7 @@ def main(argv=None) -> int:
     ok = any(r.get("ok") for r in attempted)
     if ok and not is_test:
         state[key] = now
+        state["last_any"] = now
         save_state(state)
     detail = "; ".join(f"{r.get('channel')}={r.get('detail')}" for r in results)
     n_ok = sum(1 for r in attempted if r.get("ok"))

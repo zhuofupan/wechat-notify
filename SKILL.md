@@ -96,10 +96,22 @@ DIR="~/.workbuddy/skills/wechat-notify"
 - `settings.json` 里的 hook 命令由 **bash** 执行，路径必须「正斜杠 + 双引号」，否则反斜杠会被当转义符吃掉导致静默失败。
 - hook 脚本默认不向 stdout 输出任何内容，避免干扰 hook 的 JSON 约定；日志写在脚本同目录 `hook.log`。
 - 节流状态在 `.hook_state.json`，推不出去时不要误以为被节流 —— 先看 `hook.log`。
-- **推送去重（重要）**：同一个权限请求会同时触发 `PermissionRequest` 和
-  `Notification`，两者都用 **`attention`** 这一个节流分组键，所以只会推一条。
-  别把节流键改回 `last_{event}`，否则会重复推送、白耗微信配额。
-  分组键：`stop` / `idle` / `attention` / `notice`，默认 60s。
+- **推送去重（重要，2026-09-26 重做过）**：节流键是 **`last_<分组>_<会话id>`**，
+  即"每个会话各有一份计时器"。两条规则：
+  ① 同一个权限请求会同时触发 `PermissionRequest` 和 `Notification`，
+     两者共用 `attention` 组 —— 同一会话内只推一条；
+  ② **完成类（`stop`）不进共享窗口表**，改用 `STOP_QUIET_WINDOW = 300s` 静默窗。
+- ⚠️ ⚠️ **别把节流键的会话维度去掉**（改回 `last_{分组}`）。这是用户报的
+  "同一个会话提醒很多次"的根因：键全局共享时，同一会话每轮 `Stop` 只要间隔
+  超过窗口（原来是 10s）就重复推一条，实测一个半小时会话推了 4 条"任务完成"。
+  `selftest.py` 第 3 节专门守着这条，改回去会报 `BAD`。
+- ⚠️ **别把 `stop` 加回 `THROTTLE_WINDOWS`**：`Stop` 是**每轮对话**都触发的
+  （一轮里几次工具调用结束就触发几次），窗口设短了必然刷屏、设长了又和
+  `STOP_QUIET_WINDOW` 语义打架。完成通知的正确语义是"**这个会话安静下来了**"。
+- **各组默认窗口**：`idle`/`attention`/`notice` = 60s；`stop` = 300s 静默窗；
+  另有 `GLOBAL_MIN_GAP = 15s` 跨会话兜底，挡"多会话同时收工"式齐发。
+- `.hook_state.json` 会自动裁剪（`_prune_state`）：`last_*` 键超 24h 清掉、
+  `titles` 最多留 200 条 —— 键里带会话号后会随会话数增长，不裁会一直涨。
 - **危险命令判定收紧了**：`rm -rf <项目里的临时目录>` 是 AI 的日常清理，**不再报警**；
   只有目标是 根目录/家目录/上一级/通配符/`C:/Windows`/`/usr` 之类，或命令本身是灾难性的
   （`diskpart`/`format`/`git push --force`/`DROP TABLE`…）才推。改判定逻辑跑 `selftest.py` 回归。

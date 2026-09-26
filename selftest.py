@@ -68,6 +68,7 @@ def test_title_and_dedup():
 
     class A:
         summary_chars = 60
+        stop_summary_chars = 40      # 与 hook.py 的 --stop-summary-chars 默认值保持一致
         all_permissions = False
 
     payload = {"hook_event_name": "PermissionRequest", "session_id": "SID-A",
@@ -101,7 +102,39 @@ def test_title_and_dedup():
     return 0
 
 
+def test_throttle_scope():
+    """守住"节流计时器按会话独立 + 完成类有静默窗"这两条 2026-09-26 修的规则。
+
+    背景：原实现节流键只有事件组（全局共享），同一会话每轮 Stop 间隔超过 10s
+    就重复推一条 —— 用户报的"同一个会话提醒很多次"。
+    """
+    print("=== 3) 节流作用域（回归守卫） ===")
+    bad = 0
+
+    # 3a) 完成类窗口必须够长（能盖住一轮里多次 Stop 触发）
+    for name, val, low in (("STOP_QUIET_WINDOW", hook.STOP_QUIET_WINDOW, 120.0),
+                           ("GLOBAL_MIN_GAP", hook.GLOBAL_MIN_GAP, 1.0)):
+        ok = val >= low
+        bad += 0 if ok else 1
+        print(f"  {'OK ' if ok else 'BAD'}  {name} = {val:g}s (应 >= {low:g}s)")
+
+    # 3b) 完成类不能再出现在事件组窗口表里（否则会和静默窗语义打架）
+    ok = "stop" not in hook.THROTTLE_WINDOWS
+    bad += 0 if ok else 1
+    print(f"  {'OK ' if ok else 'BAD'}  stop 不在共享窗口表中: {ok}")
+
+    # 3c) 节流键必须带会话号 —— 用源码文本判定，避免依赖运行态
+    src = (HERE / "hook.py").read_text(encoding="utf-8")
+    ok = 'f"last_{group}_{sid_key}"' in src
+    bad += 0 if ok else 1
+    print(f"  {'OK ' if ok else 'BAD'}  节流键含会话维度 (last_<组>_<sid>): {ok}")
+
+    print(f"  -> 不合规 {bad} 条\n")
+    return bad
+
+
 if __name__ == "__main__":
     n = test_dangerous()
     test_title_and_dedup()
+    n += test_throttle_scope()
     raise SystemExit(0 if n == 0 else 1)
